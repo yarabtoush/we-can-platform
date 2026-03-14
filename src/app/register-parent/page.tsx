@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import apiClient from "../../api/client";
+import supabase from "../../lib/supabase";
 
 type FormData = {
   parentName: string;
@@ -20,6 +20,8 @@ type FormData = {
 
 export default function RegisterParentPage() {
   const [step, setStep] = useState(1);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
   const [formData, setFormData] = useState<FormData>({
     parentName: "",
     nationalId: "",
@@ -40,6 +42,115 @@ export default function RegisterParentPage() {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
+  const sendOTP = async () => {
+    if (!formData.phone) {
+      setMessage("يرجى إدخال رقم الهاتف");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Check if phone already exists
+      const { data: existingUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('phone_number', formData.phone)
+        .single();
+
+      if (existingUser) {
+        setMessage("رقم الهاتف مسجل مسبقاً");
+        return;
+      }
+
+      // Generate OTP (in production, use Twilio or similar)
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+      // Store OTP in database
+      const { error } = await supabase
+        .from('users')
+        .insert({
+          phone_number: formData.phone,
+          password_hash: formData.password, // In production, hash this
+          role: 'parent',
+          otp_code: otp,
+          otp_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
+        });
+
+      if (error) throw error;
+
+      setOtpSent(true);
+      setMessage(`تم إرسال رمز التحقق إلى ${formData.phone}`);
+      // In production: send SMS with Twilio
+      alert(`رمز التحقق: ${otp}`); // For testing only
+
+    } catch (error: any) {
+      setMessage("فشل في إرسال رمز التحقق");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOTP = async () => {
+    if (!otpCode) {
+      setMessage("يرجى إدخال رمز التحقق");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone_number', formData.phone)
+        .eq('otp_code', otpCode)
+        .gt('otp_expires_at', new Date().toISOString())
+        .single();
+
+      if (error || !user) {
+        setMessage("رمز التحقق غير صحيح أو منتهي الصلاحية");
+        return;
+      }
+
+      // Update user as verified
+      await supabase
+        .from('users')
+        .update({
+          is_verified: true,
+          otp_code: null,
+          otp_expires_at: null
+        })
+        .eq('id', user.id);
+
+      // Create parent record
+      const { error: parentError } = await supabase
+        .from('parents')
+        .insert({
+          user_id: user.id,
+          full_name: formData.parentName,
+          national_id: formData.nationalId,
+          child_name: formData.childName,
+          child_national_id: formData.childNationalId,
+          disability_type: formData.disabilityType,
+          medical_reports: [], // Will be updated with file uploads
+          child_photos: [],
+          documents: [],
+          signature: formData.signature,
+        });
+
+      if (parentError) throw parentError;
+
+      setMessage("تم التسجيل بنجاح! يرجى انتظار الموافقة من الإدارة.");
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 2000);
+
+    } catch (error: any) {
+      setMessage("فشل في إكمال التسجيل");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const nextStep = () => {
     if (step < 5) setStep(step + 1);
   };
@@ -50,60 +161,51 @@ export default function RegisterParentPage() {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setLoading(true);
-    setMessage(null);
 
-    try {
-      // First, send OTP if not already done
-      if (!localStorage.getItem('otpSent')) {
-        await apiClient.sendOTP(formData.phone);
-        localStorage.setItem('otpSent', 'true');
-        setMessage("تم إرسال رمز التحقق إلى رقم هاتفك. يرجى إدخال الرمز في صفحة تسجيل الدخول.");
-        setLoading(false);
-        return;
-      }
-
-      // Create FormData for file uploads
-      const submitData = new FormData();
-      submitData.append('fullName', formData.parentName);
-      submitData.append('nationalId', formData.nationalId);
-      submitData.append('childName', formData.childName);
-      submitData.append('childNationalId', formData.childNationalId);
-      submitData.append('disabilityType', formData.disabilityType);
-      submitData.append('password', formData.password);
-
-      // Add medical reports
-      if (formData.medicalReports) {
-        Array.from(formData.medicalReports).forEach((file) => {
-          submitData.append('medicalReports', file);
-        });
-      }
-
-      // Add child photos
-      if (formData.childPhotos) {
-        Array.from(formData.childPhotos).forEach((file) => {
-          submitData.append('childPhotos', file);
-        });
-      }
-
-      // Add signature if available
-      if (formData.signature) {
-        // Convert signature to file if it's a data URL
-        const signatureBlob = await fetch(formData.signature).then(res => res.blob());
-        submitData.append('signature', signatureBlob, 'signature.png');
-      }
-
-      await apiClient.registerParent(submitData);
-      setMessage("تم إرسال طلب التسجيل بنجاح! سيتم مراجعته من قبل الإدارة خلال 24 ساعة.");
-      localStorage.removeItem('otpSent');
-    } catch (error: any) {
-      setMessage(error.message || "حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.");
-    } finally {
-      setLoading(false);
+    if (!otpSent) {
+      await sendOTP();
+    } else {
+      await verifyOTP();
     }
   };
 
   const renderStep = () => {
+    if (otpSent) {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-semibold text-slate-900">التحقق من رقم الهاتف</h2>
+          <p className="text-slate-600">تم إرسال رمز التحقق إلى {formData.phone}</p>
+          <div>
+            <label className="block text-sm font-medium text-slate-700">رمز التحقق (6 أرقام)</label>
+            <input
+              type="text"
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value)}
+              className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
+              placeholder="000000"
+              maxLength={6}
+              required
+            />
+          </div>
+          <button
+            type="button"
+            onClick={verifyOTP}
+            disabled={loading}
+            className="w-full rounded-2xl bg-sky-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-600 focus:ring-4 focus:ring-sky-100 disabled:opacity-50"
+          >
+            {loading ? "جاري التحقق..." : "تحقق من الرمز"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setOtpSent(false)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            تعديل رقم الهاتف
+          </button>
+        </div>
+      );
+    }
+
     switch (step) {
       case 1:
         return (
@@ -345,9 +447,10 @@ export default function RegisterParentPage() {
               ) : (
                 <button
                   type="submit"
-                  className="rounded-2xl bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500"
+                  disabled={loading}
+                  className="rounded-2xl bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-500 disabled:opacity-50"
                 >
-                  إرسال الطلب
+                  {loading ? "جاري الإرسال..." : otpSent ? "إرسال الطلب" : "إرسال رمز التحقق"}
                 </button>
               )}
             </div>
