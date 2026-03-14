@@ -175,8 +175,8 @@ ALTER TABLE complaints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bookings ENABLE ROW LEVEL SECURITY;
 
 -- Create admin user (run this manually after schema creation)
--- INSERT INTO users (phone_number, password_hash, role, is_verified, is_approved)
--- VALUES ('+962xxxxxxxxx', crypt('your-admin-password', gen_salt('bf')), 'admin', true, true);
+INSERT INTO users (phone_number, password_hash, role, is_verified, is_approved)
+VALUES ('+962797973816', crypt('12345678#yzmarwa', gen_salt('bf')), 'admin', true, true);
 
 -- Users policies
 CREATE POLICY "Users can view own profile" ON users FOR SELECT USING (auth.uid() = id);
