@@ -4,6 +4,18 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Drop existing tables if they exist (in reverse dependency order)
+DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS complaints;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS news;
+DROP TABLE IF EXISTS workshop_registrations;
+DROP TABLE IF EXISTS workshops;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS specialists;
+DROP TABLE IF EXISTS parents;
+DROP TABLE IF EXISTS users;
+
 -- Users table (replaces User model)
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
